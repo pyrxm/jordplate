@@ -1,0 +1,27 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ app_name }}
+  namespace: {{ environment }}
+  labels:
+    {%- for k, v in tags.items() %}
+    {{ k }}: {{ v }}
+    {%- endfor %}
+    label_list: "{{ tag_string }}"
+spec:
+  replicas: {{ replicas }}
+  selector:
+    matchLabels:
+      app: {{ app_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ app_name }}
+    spec:
+      containers:
+        - name: {{ app_name }}
+          image: {{ image }}
+          env:
+            - name: DEPLOY_ENV
+              value: {{ environment }}
