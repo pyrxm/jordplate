@@ -1,0 +1,116 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        id: vet
+        continue-on-error: true
+        run: |
+          set +e
+          go vet ./... > vet.out 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: go test
+        id: test
+        continue-on-error: true
+        run: |
+          set +e
+          go test -race -count=1 -coverprofile=coverage.out ./... > test.out 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: coverage summary
+        id: coverage
+        if: always()
+        run: |
+          if [ -s coverage.out ]; then
+            go tool cover -func=coverage.out > coverage.txt
+            total=$(grep '^total:' coverage.txt | awk '{print $3}')
+          else
+            : > coverage.txt
+            total="n/a"
+          fi
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+
+      - name: assemble PR comment
+        if: github.event_name == 'pull_request' && always()
+        env:
+          VET_EXIT: ${{ steps.vet.outputs.exit }}
+          TEST_EXIT: ${{ steps.test.outputs.exit }}
+          COVERAGE: ${{ steps.coverage.outputs.total }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          status() { [ "$1" = "0" ] && echo "pass" || echo "fail"; }
+          {
+            echo "### Test results for \`${SHA:0:7}\`"
+            echo
+            echo "| step | result |"
+            echo "| --- | --- |"
+            echo "| \`go vet\` | $(status "$VET_EXIT") |"
+            echo "| \`go test\` | $(status "$TEST_EXIT") |"
+            echo "| total coverage | \`${COVERAGE}\` |"
+            echo
+            if [ "$VET_EXIT" != "0" ] && [ -s vet.out ]; then
+              echo "<details><summary><code>go vet</code> output</summary>"
+              echo
+              printf '```\n'
+              cat vet.out
+              printf '```\n'
+              echo
+              echo "</details>"
+              echo
+            fi
+            echo "<details><summary><code>go test</code> output</summary>"
+            echo
+            printf '```\n'
+            cat test.out
+            printf '```\n'
+            echo
+            echo "</details>"
+            echo
+            if [ -s coverage.txt ]; then
+              echo "<details><summary>per-function coverage</summary>"
+              echo
+              printf '```\n'
+              cat coverage.txt
+              printf '```\n'
+              echo
+              echo "</details>"
+            fi
+          } > comment.md
+
+      - name: comment on PR
+        if: github.event_name == 'pull_request' && always()
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: test-results
+          path: comment.md
+
+      - name: fail job if vet or test failed
+        if: always() && (steps.vet.outputs.exit != '0' || steps.test.outputs.exit != '0')
+        run: |
+          echo "vet exit: ${{ steps.vet.outputs.exit }}"
+          echo "test exit: ${{ steps.test.outputs.exit }}"
+          exit 1
