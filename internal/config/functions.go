@@ -1,11 +1,23 @@
 package config
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"hash"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/hashicorp/hcl/v2/ext/tryfunc"
@@ -39,6 +51,7 @@ func stdFunctions(opts Options) map[string]function.Function {
 		"keys":       stdlib.KeysFunc,
 		"values":     stdlib.ValuesFunc,
 		"merge":      stdlib.MergeFunc,
+		"contains":   stdlib.ContainsFunc,
 
 		"trimprefix":   stdlib.TrimPrefixFunc,
 		"trimsuffix":   stdlib.TrimSuffixFunc,
@@ -50,6 +63,34 @@ func stdFunctions(opts Options) map[string]function.Function {
 		"startswith": startsWithFunc,
 		"endswith":   endsWithFunc,
 		"fileset":    filesetFunc,
+
+		"element":   stdlib.ElementFunc,
+		"flatten":   stdlib.FlattenFunc,
+		"index":     indexFunc,
+		"lookup":    stdlib.LookupFunc,
+		"range":     stdlib.RangeFunc,
+		"sort":      stdlib.SortFunc,
+		"zipmap":    stdlib.ZipmapFunc,
+		"alltrue":   alltrueFunc,
+		"anytrue":   anytrueFunc,
+		"transpose": transposeFunc,
+
+		"abspath":    abspathFunc,
+		"dirname":    dirnameFunc,
+		"basename":   basenameFunc,
+		"pathexpand": pathexpandFunc,
+		"fileexists": fileexistsFunc,
+
+		"base64encode": base64EncodeFunc,
+		"base64decode": base64DecodeFunc,
+		"urlencode":    urlencodeFunc,
+		"md5":          md5Func,
+		"sha1":         sha1Func,
+		"sha256":       sha256Func,
+		"sha512":       sha512Func,
+
+		"url_get": urlGetFunc,
+		"type":    typeFunc,
 	}
 }
 
@@ -220,3 +261,276 @@ func execFunc(allow bool) function.Function {
 		},
 	})
 }
+
+// -----------------------------------------------------------------------------
+// Collection helpers: alltrue, anytrue, transpose
+// -----------------------------------------------------------------------------
+
+// isTruthyElement returns true for cty.True and the string "true".
+// Anything else (false, numbers, other strings, null) is considered not-true.
+func isTruthyElement(v cty.Value) bool {
+	if v.IsNull() {
+		return false
+	}
+	if v.RawEquals(cty.True) {
+		return true
+	}
+	if v.Type() == cty.String && v.AsString() == "true" {
+		return true
+	}
+	return false
+}
+
+// index(list, value) -> number. Returns the first index where value is found,
+// errors if absent. Matches Terraform semantics; cty.IndexFunc indexes by
+// number instead, so we provide our own.
+var indexFunc = function.New(&function.Spec{
+	Params: []function.Parameter{
+		{Name: "list", Type: cty.DynamicPseudoType, AllowDynamicType: true},
+		{Name: "value", Type: cty.DynamicPseudoType, AllowDynamicType: true, AllowNull: true},
+	},
+	Type: function.StaticReturnType(cty.Number),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		list := args[0]
+		target := args[1]
+		if list.IsNull() || !list.CanIterateElements() {
+			return cty.NilVal, fmt.Errorf("index: first argument must be a list, set, or tuple")
+		}
+		i := 0
+		for it := list.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			if v.RawEquals(target) {
+				return cty.NumberIntVal(int64(i)), nil
+			}
+			i++
+		}
+		return cty.NilVal, fmt.Errorf("index: value not found in list")
+	},
+})
+
+// alltrue(list) -> bool. Returns true if every element is truthy. Empty -> true.
+var alltrueFunc = function.New(&function.Spec{
+	Params: []function.Parameter{{Name: "list", Type: cty.DynamicPseudoType, AllowDynamicType: true}},
+	Type:   function.StaticReturnType(cty.Bool),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		v := args[0]
+		if v.IsNull() || !v.CanIterateElements() {
+			return cty.NilVal, fmt.Errorf("alltrue: argument must be a list, set, or tuple")
+		}
+		for it := v.ElementIterator(); it.Next(); {
+			_, e := it.Element()
+			if !isTruthyElement(e) {
+				return cty.False, nil
+			}
+		}
+		return cty.True, nil
+	},
+})
+
+// anytrue(list) -> bool. Returns true if any element is truthy. Empty -> false.
+var anytrueFunc = function.New(&function.Spec{
+	Params: []function.Parameter{{Name: "list", Type: cty.DynamicPseudoType, AllowDynamicType: true}},
+	Type:   function.StaticReturnType(cty.Bool),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		v := args[0]
+		if v.IsNull() || !v.CanIterateElements() {
+			return cty.NilVal, fmt.Errorf("anytrue: argument must be a list, set, or tuple")
+		}
+		for it := v.ElementIterator(); it.Next(); {
+			_, e := it.Element()
+			if isTruthyElement(e) {
+				return cty.True, nil
+			}
+		}
+		return cty.False, nil
+	},
+})
+
+// transpose(map) -> map. Swaps keys and values in a map of string lists.
+// Element lists in the result are sorted for deterministic output.
+var transposeFunc = function.New(&function.Spec{
+	Params: []function.Parameter{
+		{Name: "values", Type: cty.Map(cty.List(cty.String))},
+	},
+	Type: function.StaticReturnType(cty.Map(cty.List(cty.String))),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		in := args[0]
+		if in.IsNull() {
+			return cty.NilVal, fmt.Errorf("transpose: input must not be null")
+		}
+		out := map[string][]string{}
+		for it := in.ElementIterator(); it.Next(); {
+			k, list := it.Element()
+			key := k.AsString()
+			for it2 := list.ElementIterator(); it2.Next(); {
+				_, v := it2.Element()
+				out[v.AsString()] = append(out[v.AsString()], key)
+			}
+		}
+		if len(out) == 0 {
+			return cty.MapValEmpty(cty.List(cty.String)), nil
+		}
+		result := make(map[string]cty.Value, len(out))
+		for k, lst := range out {
+			sort.Strings(lst)
+			vals := make([]cty.Value, len(lst))
+			for i, s := range lst {
+				vals[i] = cty.StringVal(s)
+			}
+			result[k] = cty.ListVal(vals)
+		}
+		return cty.MapVal(result), nil
+	},
+})
+
+// -----------------------------------------------------------------------------
+// Filesystem helpers: abspath, dirname, basename, pathexpand, fileexists
+// -----------------------------------------------------------------------------
+
+func stringPathFunc(impl func(string) (string, error)) function.Function {
+	return function.New(&function.Spec{
+		Params: []function.Parameter{{Name: "path", Type: cty.String}},
+		Type:   function.StaticReturnType(cty.String),
+		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+			out, err := impl(args[0].AsString())
+			if err != nil {
+				return cty.NilVal, err
+			}
+			return cty.StringVal(out), nil
+		},
+	})
+}
+
+var abspathFunc = stringPathFunc(filepath.Abs)
+var dirnameFunc = stringPathFunc(func(p string) (string, error) { return filepath.Dir(p), nil })
+var basenameFunc = stringPathFunc(func(p string) (string, error) { return filepath.Base(p), nil })
+
+// pathexpand expands a leading "~" or "~/" to the user's home directory.
+var pathexpandFunc = stringPathFunc(func(p string) (string, error) {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if p == "~" {
+			return home, nil
+		}
+		return filepath.Join(home, p[2:]), nil
+	}
+	return p, nil
+})
+
+// fileexists(path) -> bool. True for regular files, false if missing,
+// errors if the path exists but is a directory.
+var fileexistsFunc = function.New(&function.Spec{
+	Params: []function.Parameter{{Name: "path", Type: cty.String}},
+	Type:   function.StaticReturnType(cty.Bool),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		p := args[0].AsString()
+		info, err := os.Stat(p)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return cty.False, nil
+			}
+			return cty.NilVal, err
+		}
+		if info.IsDir() {
+			return cty.NilVal, fmt.Errorf("fileexists: %s is a directory, not a file", p)
+		}
+		return cty.True, nil
+	},
+})
+
+// -----------------------------------------------------------------------------
+// Encoding & hashing: base64encode/decode, urlencode, md5, sha1, sha256, sha512
+// -----------------------------------------------------------------------------
+
+var base64EncodeFunc = function.New(&function.Spec{
+	Params: []function.Parameter{{Name: "s", Type: cty.String}},
+	Type:   function.StaticReturnType(cty.String),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		return cty.StringVal(base64.StdEncoding.EncodeToString([]byte(args[0].AsString()))), nil
+	},
+})
+
+var base64DecodeFunc = function.New(&function.Spec{
+	Params: []function.Parameter{{Name: "s", Type: cty.String}},
+	Type:   function.StaticReturnType(cty.String),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		b, err := base64.StdEncoding.DecodeString(args[0].AsString())
+		if err != nil {
+			return cty.NilVal, fmt.Errorf("base64decode: %w", err)
+		}
+		return cty.StringVal(string(b)), nil
+	},
+})
+
+var urlencodeFunc = function.New(&function.Spec{
+	Params: []function.Parameter{{Name: "s", Type: cty.String}},
+	Type:   function.StaticReturnType(cty.String),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		return cty.StringVal(url.QueryEscape(args[0].AsString())), nil
+	},
+})
+
+func hashHexFunc(hasher func() hash.Hash) function.Function {
+	return function.New(&function.Spec{
+		Params: []function.Parameter{{Name: "data", Type: cty.String}},
+		Type:   function.StaticReturnType(cty.String),
+		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+			h := hasher()
+			h.Write([]byte(args[0].AsString()))
+			return cty.StringVal(hex.EncodeToString(h.Sum(nil))), nil
+		},
+	})
+}
+
+var (
+	md5Func    = hashHexFunc(md5.New)
+	sha1Func   = hashHexFunc(sha1.New)
+	sha256Func = hashHexFunc(sha256.New)
+	sha512Func = hashHexFunc(sha512.New)
+)
+
+// -----------------------------------------------------------------------------
+// Network: url_get
+// -----------------------------------------------------------------------------
+
+// url_get(url) -> string body. Performs an HTTP GET with a 10s timeout and
+// caps the response body at 10 MiB.
+var urlGetFunc = function.New(&function.Spec{
+	Params: []function.Parameter{{Name: "url", Type: cty.String}},
+	Type:   function.StaticReturnType(cty.String),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Get(args[0].AsString())
+		if err != nil {
+			return cty.NilVal, fmt.Errorf("url_get: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			return cty.NilVal, fmt.Errorf("url_get: HTTP %d", resp.StatusCode)
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		if err != nil {
+			return cty.NilVal, fmt.Errorf("url_get: read body: %w", err)
+		}
+		return cty.StringVal(string(body)), nil
+	},
+})
+
+// -----------------------------------------------------------------------------
+// Misc: type
+// -----------------------------------------------------------------------------
+
+// type(value) -> string. Returns the cty friendly-name of the value's type
+// ("string", "number", "list of string", etc.).
+var typeFunc = function.New(&function.Spec{
+	Params: []function.Parameter{
+		{Name: "value", Type: cty.DynamicPseudoType, AllowDynamicType: true, AllowNull: true},
+	},
+	Type: function.StaticReturnType(cty.String),
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		return cty.StringVal(args[0].Type().FriendlyName()), nil
+	},
+})

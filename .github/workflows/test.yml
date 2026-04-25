@@ -24,6 +24,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: jordplate fmt --check
+        id: fmt
+        continue-on-error: true
+        run: |
+          set +e
+          go run . fmt --check -r . > fmt.out 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+
       - name: go vet
         id: vet
         continue-on-error: true
@@ -56,6 +64,7 @@ jobs:
       - name: assemble PR comment
         if: github.event_name == 'pull_request' && always()
         env:
+          FMT_EXIT: ${{ steps.fmt.outputs.exit }}
           VET_EXIT: ${{ steps.vet.outputs.exit }}
           TEST_EXIT: ${{ steps.test.outputs.exit }}
           COVERAGE: ${{ steps.coverage.outputs.total }}
@@ -67,10 +76,21 @@ jobs:
             echo
             echo "| step | result |"
             echo "| --- | --- |"
+            echo "| \`jordplate fmt --check\` | $(status "$FMT_EXIT") |"
             echo "| \`go vet\` | $(status "$VET_EXIT") |"
             echo "| \`go test\` | $(status "$TEST_EXIT") |"
             echo "| total coverage | \`${COVERAGE}\` |"
             echo
+            if [ "$FMT_EXIT" != "0" ] && [ -s fmt.out ]; then
+              echo "<details><summary><code>jordplate fmt --check</code> output</summary>"
+              echo
+              printf '```\n'
+              cat fmt.out
+              printf '```\n'
+              echo
+              echo "</details>"
+              echo
+            fi
             if [ "$VET_EXIT" != "0" ] && [ -s vet.out ]; then
               echo "<details><summary><code>go vet</code> output</summary>"
               echo
@@ -108,9 +128,10 @@ jobs:
           header: test-results
           path: comment.md
 
-      - name: fail job if vet or test failed
-        if: always() && (steps.vet.outputs.exit != '0' || steps.test.outputs.exit != '0')
+      - name: fail job if any check failed
+        if: always() && (steps.fmt.outputs.exit != '0' || steps.vet.outputs.exit != '0' || steps.test.outputs.exit != '0')
         run: |
-          echo "vet exit: ${{ steps.vet.outputs.exit }}"
+          echo "fmt exit:  ${{ steps.fmt.outputs.exit }}"
+          echo "vet exit:  ${{ steps.vet.outputs.exit }}"
           echo "test exit: ${{ steps.test.outputs.exit }}"
           exit 1
