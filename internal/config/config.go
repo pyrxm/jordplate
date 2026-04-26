@@ -29,7 +29,7 @@ type Template struct {
 	Source      string
 	Destination string
 	Values      cty.Value
-	Disabled    bool
+	Enabled     bool
 }
 
 var fileSchema = &hcl.BodySchema{
@@ -46,7 +46,7 @@ var templateSchema = &hcl.BodySchema{
 		{Name: "values"},
 		{Name: "count"},
 		{Name: "for_each"},
-		{Name: "disabled"},
+		{Name: "enabled"},
 	},
 }
 
@@ -185,15 +185,16 @@ func evaluateTemplates(blocks hcl.Blocks, evalCtx *hcl.EvalContext) ([]Template,
 			} else {
 				t.Values = cty.EmptyObjectVal
 			}
-			if attr, ok := content.Attributes["disabled"]; ok {
+			t.Enabled = true
+			if attr, ok := content.Attributes["enabled"]; ok {
 				val, diags := attr.Expr.Value(iter.ctx)
 				if diags.HasErrors() {
 					return nil, diags
 				}
 				if val.IsNull() || val.Type() != cty.Bool {
-					return nil, fmt.Errorf("template '%s': disabled must be a boolean", iter.name)
+					return nil, fmt.Errorf("template '%s': enabled must be a boolean", iter.name)
 				}
-				t.Disabled = val.True()
+				t.Enabled = val.True()
 			}
 			templates = append(templates, t)
 		}

@@ -32,7 +32,7 @@ var renderCmd = &cobra.Command{
 
 		baseDir := filepath.Dir(absCfg)
 		for _, tpl := range cfg.Templates {
-			if tpl.Disabled {
+			if !tpl.Enabled {
 				fmt.Fprintf(cmd.OutOrStdout(), "skipped '%s' (disabled)\n", tpl.Name)
 				continue
 			}

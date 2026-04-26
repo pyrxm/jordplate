@@ -130,7 +130,7 @@ template "name" {
   values      = { ... } # optional: data passed to the template (defaults to {})
   count       = N       # optional: produce N instances
   for_each    = MAP     # optional: produce one instance per key
-  disabled    = false   # optional: skip this template when true
+  enabled     = true    # optional: render only when true (default: true)
 }
 ```
 
@@ -139,7 +139,7 @@ template "name" {
 #### `count`
 
 `count = N` produces N instances. Inside the block, `count.index` (0..N-1) is
-in scope for `source`, `destination`, `values`, and `disabled`.
+in scope for `source`, `destination`, `values`, and `enabled`.
 
 ```hcl
 template "shard" {
@@ -175,15 +175,15 @@ template "region" {
 `count` and `for_each` are mutually exclusive on the same block. `count = 0` or
 `for_each = {}` produces no instances.
 
-#### `disabled`
+#### `enabled`
 
-A boolean that skips rendering the block. Sees the iteration context, so it
-can disable specific instances:
+A boolean that controls whether the block is rendered (default `true`). Sees
+the iteration context, so it can disable specific instances:
 
 ```hcl
 template "shard" {
   count       = 3
-  disabled    = count.index == 1   # skip shard[1]
+  enabled     = count.index != 1   # skip shard[1]
   source      = "shard.j2"
   destination = "out/shard-${count.index}.yaml"
 }

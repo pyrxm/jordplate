@@ -1,0 +1,28 @@
+locals {
+  {{ alias }}_namespaces = { for k, v in try(local.config.clusters["{{ alias }}"].namespaces, {}) : k => v }
+}
+
+resource "kubernetes_namespace_v1" "ns_{{ alias }}" {
+  for_each = local.{{ alias }}_namespaces
+
+  metadata {
+    name = join("-", [local.config.application_name, each.key])
+  }
+
+  provider = kubernetes.{{ alias }}
+}
+
+resource "kubernetes_resource_quota_v1" "ns_{{ alias }}" {
+  for_each = local.{{ alias }}_namespaces
+
+  metadata {
+    name      = format("%s-quota", each.key)
+    namespace = kubernetes_namespace_v1.ns_{{ alias }}[each.key].metadata.0.name
+  }
+
+  spec {
+    hard = length(each.value) > 0 ? each.value : local.default_namespace_quotas
+  }
+
+  provider = kubernetes.{{ alias }}
+}

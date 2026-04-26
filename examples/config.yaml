@@ -1,0 +1,37 @@
+---
+application_name: "nginx-proxy"
+image: "nginx"
+version: latest
+
+deployments:
+  nonprod:
+    replicas: 1
+    labels:
+      environment: nonprod
+  prod:
+    replicas: 3
+    labels:
+      environment: prod
+
+clusters:
+  nonprod-europe-001:
+    namespaces:
+      dev:
+        "requests.cpu": "16"
+        "requests.memory": "32Gi"
+        "limits.cpu": "16"
+        "limits.memory": "32Gi"
+      uat: {}
+  prod-europe-001:
+    enabled: true
+    namespaces:
+      prod:
+        "requests.cpu": "32"
+        "requests.memory": "64Gi"
+        "limits.cpu": "32"
+        "limits.memory": "64Gi"
+      dr:
+        "requests.cpu": "32"
+        "requests.memory": "64Gi"
+        "limits.cpu": "32"
+        "limits.memory": "64Gi"

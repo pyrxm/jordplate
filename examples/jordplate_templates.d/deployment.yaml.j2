@@ -3,12 +3,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ app_name }}
-  namespace: {{ environment }}
-  labels:
-    {%- for k, v in tags.items() %}
-    {{ k }}: {{ v }}
-    {%- endfor %}
-    label_list: "{{ tag_string }}"
+  namespace: {{ namespace }}
+  labels: {{ labels }}
 spec:
   replicas: {{ replicas }}
   selector:

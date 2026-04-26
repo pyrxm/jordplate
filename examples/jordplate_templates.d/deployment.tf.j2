@@ -1,0 +1,4 @@
+resource "kubectl_manifest" "{{alias}}_{{ namespace }}" {
+  yaml_body = file("./{{ filename }}.yaml")
+  provider  = kubectl.{{ alias }}
+}

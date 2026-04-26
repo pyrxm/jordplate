@@ -373,7 +373,7 @@ template "region" {
 	}
 }
 
-func TestLoad_Disabled(t *testing.T) {
+func TestLoad_Enabled(t *testing.T) {
 	dir := t.TempDir()
 	hcl := `
 template "on" {
@@ -381,13 +381,13 @@ template "on" {
   destination = "x.out"
 }
 template "off" {
-  disabled    = true
+  enabled     = false
   source      = "x.j2"
   destination = "x.out"
 }
 template "shard" {
   count       = 3
-  disabled    = count.index == 1
+  enabled     = count.index != 1
   source      = "x.j2"
   destination = "out/${count.index}"
 }
@@ -397,35 +397,35 @@ template "shard" {
 		t.Fatalf("Load: %v", err)
 	}
 	want := map[string]bool{
-		"on":       false,
-		"off":      true,
-		"shard[0]": false,
-		"shard[1]": true, // each.index == 1
-		"shard[2]": false,
+		"on":       true,
+		"off":      false,
+		"shard[0]": true,
+		"shard[1]": false, // count.index == 1
+		"shard[2]": true,
 	}
 	got := map[string]bool{}
 	for _, tpl := range cfg.Templates {
-		got[tpl.Name] = tpl.Disabled
+		got[tpl.Name] = tpl.Enabled
 	}
-	for name, wantDisabled := range want {
-		if got[name] != wantDisabled {
-			t.Errorf("templates[%q].Disabled = %v, want %v", name, got[name], wantDisabled)
+	for name, wantEnabled := range want {
+		if got[name] != wantEnabled {
+			t.Errorf("templates[%q].Enabled = %v, want %v", name, got[name], wantEnabled)
 		}
 	}
 }
 
-func TestLoad_DisabledNotBool(t *testing.T) {
+func TestLoad_EnabledNotBool(t *testing.T) {
 	dir := t.TempDir()
 	hcl := `
 template "t" {
-  disabled    = "yes"
+  enabled     = "yes"
   source      = "x"
   destination = "y"
 }
 `
 	_, err := Load(writeHCL(t, dir, hcl), Options{})
 	if err == nil {
-		t.Fatal("expected error for non-boolean disabled, got nil")
+		t.Fatal("expected error for non-boolean enabled, got nil")
 	}
 	if !strings.Contains(err.Error(), "must be a boolean") {
 		t.Errorf("error = %q, want it to mention boolean", err)

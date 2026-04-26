@@ -1,0 +1,10 @@
+provider "kubernetes" {
+  alias = "{{ alias }}"
+  host  = "https://{{ hostname }}"
+}
+
+provider "kubectl" {
+  alias            = "{{ alias }}"
+  host             = "https://{{ hostname }}"
+  load_config_file = false
+}
