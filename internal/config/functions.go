@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -91,6 +92,8 @@ func stdFunctions(opts Options) map[string]function.Function {
 
 		"url_get": urlGetFunc,
 		"type":    typeFunc,
+
+		"get_platform": getPlatformFunc,
 	}
 }
 
@@ -532,5 +535,15 @@ var typeFunc = function.New(&function.Spec{
 	Type: function.StaticReturnType(cty.String),
 	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
 		return cty.StringVal(args[0].Type().FriendlyName()), nil
+	},
+})
+
+// get_platform() -> string. Returns the host operating system as reported by
+// the Go runtime: "linux", "darwin", "windows", "freebsd", etc.
+var getPlatformFunc = function.New(&function.Spec{
+	Params: []function.Parameter{},
+	Type:   function.StaticReturnType(cty.String),
+	Impl: func(_ []cty.Value, _ cty.Type) (cty.Value, error) {
+		return cty.StringVal(runtime.GOOS), nil
 	},
 })

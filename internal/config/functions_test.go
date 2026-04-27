@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"testing"
 
@@ -479,6 +480,16 @@ func TestTypeFunc(t *testing.T) {
 				t.Errorf("type(%v) = %q, want %q", tc.in, got.AsString(), tc.want)
 			}
 		})
+	}
+}
+
+func TestGetPlatformFunc(t *testing.T) {
+	got, err := getPlatformFunc.Call(nil)
+	if err != nil {
+		t.Fatalf("get_platform: %v", err)
+	}
+	if got.AsString() != runtime.GOOS {
+		t.Errorf("get_platform() = %q, want %q", got.AsString(), runtime.GOOS)
 	}
 }
 

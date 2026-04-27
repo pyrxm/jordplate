@@ -264,6 +264,7 @@ template "shard" {
 | `try(expr, default)` | Return `expr`, or `default` if `expr` errors |
 | `can(expr)` | `true` if `expr` evaluates without error |
 | `type(value)` | Friendly name of the value's type |
+| `get_platform()` | Host operating system (`linux`, `darwin`, `windows`, ...) |
 
 ## Templates
 

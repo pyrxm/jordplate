@@ -19,6 +19,7 @@ locals {
       for cluster, cluster_conf in local.kubernetes_clusters : [
         for namespace in try(cluster_conf.namespaces, []) : {
           key         = join("-", [cluster, namespace])
+          platform    = get_platform()
           alias       = cluster
           environment = cluster_conf.environment
           namespace   = join("-", [local.config.application_name, namespace])
