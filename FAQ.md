@@ -44,7 +44,7 @@ It's still just "earth-plate" (think plate tectonics).
 
 ## How to pronounce `jordplate`?
 
-For the Anglophones, it's pronounces a bit like "_your(d)-platter_", but "yord plate" will do.
+For the Anglophones, it's pronounces a bit like "_your(d)-platter_", but "your plate" or "yord plate" will do.
 
 ## Was this written with AI?
 
@@ -54,4 +54,4 @@ for a CLI utility (eg. "cobra"), but there's probably stuff I have glossed over.
 
 ## Can I contribute?
 
-You sure can
+You sure can.
