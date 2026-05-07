@@ -293,4 +293,7 @@ Treat HCL config files the same way you would treat shell scripts.
 
 ## License
 
-[Mozilla Public License 2.0](LICENSE).
+[MIT](LICENSE). 
+
+Third-party dependency licenses are listed in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
