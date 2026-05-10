@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"dario.cat/mergo"
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/hashicorp/hcl/v2/ext/tryfunc"
 	"github.com/zclconf/go-cty/cty"
@@ -52,6 +53,7 @@ func stdFunctions(opts Options) map[string]function.Function {
 		"keys":       stdlib.KeysFunc,
 		"values":     stdlib.ValuesFunc,
 		"merge":      stdlib.MergeFunc,
+		"deep_merge": deepMergeFunc,
 		"contains":   stdlib.ContainsFunc,
 
 		"trimprefix":   stdlib.TrimPrefixFunc,
@@ -95,6 +97,130 @@ func stdFunctions(opts Options) map[string]function.Function {
 
 		"get_platform": getPlatformFunc,
 	}
+}
+
+// deepMergeOptKeys lists the keys recognised inside a trailing options object
+// passed to deep_merge(). Any object whose keys are all in this set is treated
+// as options rather than as another map to merge.
+var deepMergeOptKeys = map[string]bool{
+	"append_slices":     true,
+	"merge_slice_items": true,
+}
+
+// deep_merge(maps..., opts?) -> object. Deeply merges objects/maps; later
+// values win. An optional trailing object whose keys are all in
+// deepMergeOptKeys is interpreted as flags:
+//
+//	append_slices     - concatenate slices instead of replacing.
+//	merge_slice_items - merge slice elements pairwise by index.
+//
+// Backed by dario.cat/mergo. Non-object/map arguments are an error.
+var deepMergeFunc = function.New(&function.Spec{
+	Params: []function.Parameter{},
+	VarParam: &function.Parameter{
+		Name:             "values",
+		Type:             cty.DynamicPseudoType,
+		AllowDynamicType: true,
+		AllowNull:        true,
+	},
+	Type: func(args []cty.Value) (cty.Type, error) {
+		return cty.DynamicPseudoType, nil
+	},
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		maps, opts, err := splitDeepMergeArgs(args)
+		if err != nil {
+			return cty.NilVal, err
+		}
+		if len(maps) == 0 {
+			return cty.EmptyObjectVal, nil
+		}
+
+		mergoOpts := []func(*mergo.Config){mergo.WithOverride}
+		if opts.appendSlices {
+			mergoOpts = append(mergoOpts, mergo.WithAppendSlice)
+		}
+		if opts.mergeSliceItems {
+			mergoOpts = append(mergoOpts, mergo.WithSliceDeepCopy)
+		}
+
+		dst := map[string]any{}
+		for i, m := range maps {
+			src, ok := ToGo(m).(map[string]any)
+			if !ok {
+				return cty.NilVal, fmt.Errorf("deep_merge: argument %d is not an object/map", i+1)
+			}
+			if err := mergo.Merge(&dst, src, mergoOpts...); err != nil {
+				return cty.NilVal, fmt.Errorf("deep_merge: %w", err)
+			}
+		}
+		return FromGo(dst), nil
+	},
+})
+
+type deepMergeOpts struct {
+	appendSlices    bool
+	mergeSliceItems bool
+}
+
+// splitDeepMergeArgs separates the trailing options object (if any) from the
+// list of maps to merge. An argument is treated as options when it is a
+// non-null object/map whose keys are all in deepMergeOptKeys. Empty {} also
+// counts as an (empty) options object.
+func splitDeepMergeArgs(args []cty.Value) ([]cty.Value, deepMergeOpts, error) {
+	var opts deepMergeOpts
+	if len(args) == 0 {
+		return nil, opts, nil
+	}
+	last := args[len(args)-1]
+	if isDeepMergeOpts(last) {
+		o, err := parseDeepMergeOpts(last)
+		if err != nil {
+			return nil, opts, err
+		}
+		return args[:len(args)-1], o, nil
+	}
+	return args, opts, nil
+}
+
+func isDeepMergeOpts(v cty.Value) bool {
+	if v.IsNull() {
+		return false
+	}
+	ty := v.Type()
+	if !(ty.IsObjectType() || ty.IsMapType()) {
+		return false
+	}
+	if v.LengthInt() == 0 {
+		// Treat empty {} as an explicit "no options" sentinel rather than as
+		// an empty map to merge; merging {} is a no-op anyway.
+		return true
+	}
+	for it := v.ElementIterator(); it.Next(); {
+		k, val := it.Element()
+		if !deepMergeOptKeys[k.AsString()] {
+			return false
+		}
+		if val.IsNull() || val.Type() != cty.Bool {
+			return false
+		}
+	}
+	return true
+}
+
+func parseDeepMergeOpts(v cty.Value) (deepMergeOpts, error) {
+	var o deepMergeOpts
+	for it := v.ElementIterator(); it.Next(); {
+		k, val := it.Element()
+		switch k.AsString() {
+		case "append_slices":
+			o.appendSlices = val.True()
+		case "merge_slice_items":
+			o.mergeSliceItems = val.True()
+		default:
+			return o, fmt.Errorf("deep_merge: unknown option %q", k.AsString())
+		}
+	}
+	return o, nil
 }
 
 // coalesce(args...) -> first arg that is neither null nor an empty string

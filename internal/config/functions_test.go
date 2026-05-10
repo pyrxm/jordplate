@@ -547,3 +547,166 @@ template "t" {
 		t.Errorf("lookup = %v", got("looked_up"))
 	}
 }
+
+func TestDeepMergeFunc_NestedOverride(t *testing.T) {
+	// Later args win on conflicting scalar leaves; nested objects are merged
+	// recursively rather than replaced wholesale.
+	a := cty.ObjectVal(map[string]cty.Value{
+		"db": cty.ObjectVal(map[string]cty.Value{
+			"host": cty.StringVal("a-host"),
+			"port": cty.NumberIntVal(5432),
+		}),
+		"feature_x": cty.True,
+	})
+	b := cty.ObjectVal(map[string]cty.Value{
+		"db": cty.ObjectVal(map[string]cty.Value{
+			"host": cty.StringVal("b-host"),
+		}),
+		"feature_y": cty.False,
+	})
+	got, err := deepMergeFunc.Call([]cty.Value{a, b})
+	if err != nil {
+		t.Fatalf("deep_merge: %v", err)
+	}
+	m := ToGo(got).(map[string]any)
+	db := m["db"].(map[string]any)
+	if db["host"] != "b-host" {
+		t.Errorf("db.host = %v, want b-host", db["host"])
+	}
+	if db["port"] != int64(5432) {
+		t.Errorf("db.port = %v, want 5432 (preserved from a)", db["port"])
+	}
+	if m["feature_x"] != true || m["feature_y"] != false {
+		t.Errorf("features = %v / %v", m["feature_x"], m["feature_y"])
+	}
+}
+
+func TestDeepMergeFunc_SliceOverwriteByDefault(t *testing.T) {
+	a := cty.ObjectVal(map[string]cty.Value{
+		"items": cty.TupleVal([]cty.Value{cty.StringVal("x"), cty.StringVal("y")}),
+	})
+	b := cty.ObjectVal(map[string]cty.Value{
+		"items": cty.TupleVal([]cty.Value{cty.StringVal("z")}),
+	})
+	got, err := deepMergeFunc.Call([]cty.Value{a, b})
+	if err != nil {
+		t.Fatalf("deep_merge: %v", err)
+	}
+	items := ToGo(got).(map[string]any)["items"].([]any)
+	if len(items) != 1 || items[0] != "z" {
+		t.Errorf("items = %v, want [z]", items)
+	}
+}
+
+func TestDeepMergeFunc_AppendSlices(t *testing.T) {
+	a := cty.ObjectVal(map[string]cty.Value{
+		"items": cty.TupleVal([]cty.Value{cty.StringVal("x"), cty.StringVal("y")}),
+	})
+	b := cty.ObjectVal(map[string]cty.Value{
+		"items": cty.TupleVal([]cty.Value{cty.StringVal("z")}),
+	})
+	opts := cty.ObjectVal(map[string]cty.Value{
+		"append_slices": cty.True,
+	})
+	got, err := deepMergeFunc.Call([]cty.Value{a, b, opts})
+	if err != nil {
+		t.Fatalf("deep_merge: %v", err)
+	}
+	items := ToGo(got).(map[string]any)["items"].([]any)
+	want := []any{"x", "y", "z"}
+	if !reflect.DeepEqual(items, want) {
+		t.Errorf("items = %v, want %v", items, want)
+	}
+}
+
+func TestDeepMergeFunc_MergeSliceItems(t *testing.T) {
+	// merge_slice_items deep-copies the source slice into the destination,
+	// element by element. With WithOverride that ends up replacing dst's
+	// elements with src's at each index covered by src.
+	a := cty.ObjectVal(map[string]cty.Value{
+		"items": cty.TupleVal([]cty.Value{
+			cty.ObjectVal(map[string]cty.Value{"name": cty.StringVal("a"), "qty": cty.NumberIntVal(1)}),
+			cty.ObjectVal(map[string]cty.Value{"name": cty.StringVal("b"), "qty": cty.NumberIntVal(2)}),
+		}),
+	})
+	b := cty.ObjectVal(map[string]cty.Value{
+		"items": cty.TupleVal([]cty.Value{
+			cty.ObjectVal(map[string]cty.Value{"name": cty.StringVal("A"), "qty": cty.NumberIntVal(10)}),
+		}),
+	})
+	opts := cty.ObjectVal(map[string]cty.Value{
+		"merge_slice_items": cty.True,
+	})
+	got, err := deepMergeFunc.Call([]cty.Value{a, b, opts})
+	if err != nil {
+		t.Fatalf("deep_merge: %v", err)
+	}
+	items := ToGo(got).(map[string]any)["items"].([]any)
+	if len(items) == 0 {
+		t.Fatalf("items empty: %v", items)
+	}
+	first := items[0].(map[string]any)
+	if first["name"] != "A" || first["qty"] != int64(10) {
+		t.Errorf("items[0] = %v, want name=A qty=10", first)
+	}
+}
+
+func TestDeepMergeFunc_OptsHeuristicDetection(t *testing.T) {
+	// An object whose keys aren't all option names must be merged, not
+	// interpreted as opts.
+	a := cty.ObjectVal(map[string]cty.Value{"a": cty.NumberIntVal(1)})
+	notOpts := cty.ObjectVal(map[string]cty.Value{
+		"append_slices": cty.True, // looks like an opt key...
+		"something":     cty.StringVal("extra"),
+	})
+	got, err := deepMergeFunc.Call([]cty.Value{a, notOpts})
+	if err != nil {
+		t.Fatalf("deep_merge: %v", err)
+	}
+	m := ToGo(got).(map[string]any)
+	if m["append_slices"] != true {
+		t.Errorf("append_slices not merged in: %v", m)
+	}
+	if m["something"] != "extra" {
+		t.Errorf("something not merged in: %v", m)
+	}
+}
+
+func TestDeepMergeFunc_EmptyOptsIsNoop(t *testing.T) {
+	a := cty.ObjectVal(map[string]cty.Value{"a": cty.NumberIntVal(1)})
+	got, err := deepMergeFunc.Call([]cty.Value{a, cty.EmptyObjectVal})
+	if err != nil {
+		t.Fatalf("deep_merge: %v", err)
+	}
+	m := ToGo(got).(map[string]any)
+	if m["a"] != int64(1) || len(m) != 1 {
+		t.Errorf("result = %v, want only {a:1}", m)
+	}
+}
+
+func TestDeepMergeFunc_NonMapArgumentFails(t *testing.T) {
+	_, err := deepMergeFunc.Call([]cty.Value{
+		cty.ObjectVal(map[string]cty.Value{"a": cty.NumberIntVal(1)}),
+		cty.StringVal("not a map"),
+	})
+	if err == nil {
+		t.Fatal("expected error for non-map argument, got nil")
+	}
+}
+
+func TestDeepMergeFunc_NonBoolOptValueTreatedAsMap(t *testing.T) {
+	// An object that has only opt-named keys but non-bool values is NOT opts;
+	// it should be merged as data.
+	a := cty.ObjectVal(map[string]cty.Value{"x": cty.NumberIntVal(1)})
+	stringyOpt := cty.ObjectVal(map[string]cty.Value{
+		"append_slices": cty.StringVal("true"),
+	})
+	got, err := deepMergeFunc.Call([]cty.Value{a, stringyOpt})
+	if err != nil {
+		t.Fatalf("deep_merge: %v", err)
+	}
+	m := ToGo(got).(map[string]any)
+	if m["append_slices"] != "true" {
+		t.Errorf("stringy opt should have been merged: %v", m)
+	}
+}

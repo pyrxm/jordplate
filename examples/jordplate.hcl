@@ -1,7 +1,41 @@
+pre_hook "echo" {
+  command = ["echo", "hello world"]
+}
+
+post_hook "list_files" {
+  command = ["ls", "-l", "out/"]
+}
+
+post_hook "size_files" {
+  depends_on = ["list_files"]
+  command    = ["du", "-sh", "out/"]
+}
+
+post_hook "archive_files" {
+  depends_on = ["size_files"]
+  command    = ["tar", "cvzf", format("%s.tar.gz", local.archive_file), "out/"]
+}
+
 locals {
   config          = yamldecode(file("config.yaml"))
   template_dir    = "jordplate_templates.d/"
-  template_prefix = "_jp"
+  template_prefix = "out/_jp"
+  archive_file    = "_jp-rendered"
+
+  shell_base = {
+    name   = "Nobody"
+    values = ["hello"]
+    map = {
+      alpha = {
+        this = true
+      }
+      beta = {
+        hello = {
+          world = "true"
+        }
+      }
+    }
+  }
 
   kubernetes_fqdn = "kubernetes.mynetwork.com"
 
@@ -69,4 +103,32 @@ template "kubernetes_deployment" {
   source      = format("%s/deployment.tf.j2", local.template_dir)
   destination = format("%s.tf", each.value.filename)
   values      = each.value
+}
+
+template "shell_script" {
+  for_each = {
+    nonprod = {
+      name   = "Non-Production"
+      values = ["I", "am", "nonprod..."]
+      map = {
+        alpha = { that = true }
+        beta  = { hello = { there = true } }
+      }
+    }
+    prod = {
+      name   = "Production"
+      values = ["WARNING!!!", "This", "is", "production!"]
+      map = {
+        alpha = { this = false }
+      }
+    }
+  }
+
+  source      = format("%s/deep_merge.sh.j2", local.template_dir)
+  destination = format("%s-%s-deep_merge.sh", local.template_prefix, each.key)
+  values = {
+    name          = each.value.name
+    merged_values = deep_merge(local.shell_base, each.value, { append_slices = true, merge_slice_items = true }).values
+    merged_json   = jsonencode(deep_merge(local.shell_base, each.value, { append_slices = true, merge_slice_items = true }))
+  }
 }

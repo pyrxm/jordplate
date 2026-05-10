@@ -9,6 +9,7 @@ project is recorded in `go.mod` / `go.sum`.
 
 | Module | License | Source |
 | --- | --- | --- |
+| `dario.cat/mergo` | BSD-3-Clause | https://github.com/darccio/mergo |
 | `github.com/bmatcuk/doublestar/v4` | MIT | https://github.com/bmatcuk/doublestar |
 | `github.com/hashicorp/hcl/v2` | MPL-2.0 | https://github.com/hashicorp/hcl |
 | `github.com/nikolalohinski/gonja/v2` | MIT | https://github.com/nikolalohinski/gonja |
