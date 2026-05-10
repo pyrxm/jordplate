@@ -267,7 +267,8 @@ templates still render. With `--dry-run`, hooks are never executed; instead
 | --- | --- |
 | `keys(map)` / `values(map)` | Map key / value lists |
 | `concat(lists...)` | Concatenate lists |
-| `merge(maps...)` | Merge maps; later keys win |
+| `merge(maps...)` | Shallow merge of maps; later keys win |
+| `deep_merge(maps..., opts?)` | Deep merge of maps. Optional trailing object: `{ append_slices = true }` concatenates slices instead of overwriting; `{ merge_slice_items = true }` merges slice elements pairwise by index. Backed by [`dario.cat/mergo`](https://github.com/darccio/mergo) |
 | `compact(list)` | Remove empty strings from a list |
 | `distinct(list)` | Remove duplicates from a list |
 | `flatten(list)` | Flatten nested lists into a single list |

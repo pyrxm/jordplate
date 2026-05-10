@@ -22,6 +22,21 @@ locals {
   template_prefix = "out/_jp"
   archive_file    = "_jp-rendered"
 
+  shell_base = {
+    name   = "Nobody"
+    values = ["hello"]
+    map = {
+      alpha = {
+        this = true
+      }
+      beta = {
+        hello = {
+          world = "true"
+        }
+      }
+    }
+  }
+
   kubernetes_fqdn = "kubernetes.mynetwork.com"
 
   kubernetes_clusters = {
@@ -88,4 +103,32 @@ template "kubernetes_deployment" {
   source      = format("%s/deployment.tf.j2", local.template_dir)
   destination = format("%s.tf", each.value.filename)
   values      = each.value
+}
+
+template "shell_script" {
+  for_each = {
+    nonprod = {
+      name   = "Non-Production"
+      values = ["I", "am", "nonprod..."]
+      map = {
+        alpha = { that = true }
+        beta  = { hello = { there = true } }
+      }
+    }
+    prod = {
+      name   = "Production"
+      values = ["WARNING!!!", "This", "is", "production!"]
+      map = {
+        alpha = { this = false }
+      }
+    }
+  }
+
+  source      = format("%s/deep_merge.sh.j2", local.template_dir)
+  destination = format("%s-%s-deep_merge.sh", local.template_prefix, each.key)
+  values = {
+    name          = each.value.name
+    merged_values = deep_merge(local.shell_base, each.value, { append_slices = true, merge_slice_items = true }).values
+    merged_json   = jsonencode(deep_merge(local.shell_base, each.value, { append_slices = true, merge_slice_items = true }))
+  }
 }

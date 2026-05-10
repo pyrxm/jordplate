@@ -3,6 +3,7 @@ module github.com/pyrxm/jordplate
 go 1.25
 
 require (
+	dario.cat/mergo v1.0.2
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/nikolalohinski/gonja/v2 v2.8.0
