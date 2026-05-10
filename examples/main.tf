@@ -1,6 +1,6 @@
 locals {
   config   = yamldecode(file("config.yaml"))
-  jp_files = [for file in fileset("./", "_jp-*") : file]
+  jp_files = [for file in fileset("./out", "_jp-*") : file]
   default_namespace_quotas = {
     "requests.cpu"    = "8"
     "requests.memory" = "16Gi"

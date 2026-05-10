@@ -1,0 +1,12 @@
+---
+name: "example-c"
+
+map:
+  test-c:
+    enabled: true
+  foo: bar
+  list:
+    - map-list-3
+
+list:
+  - item-3

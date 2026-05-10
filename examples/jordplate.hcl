@@ -128,7 +128,20 @@ template "shell_script" {
   destination = format("%s-%s-deep_merge.sh", local.template_prefix, each.key)
   values = {
     name          = each.value.name
-    merged_values = deep_merge(local.shell_base, each.value, { append_slices = true, merge_slice_items = true }).values
-    merged_json   = jsonencode(deep_merge(local.shell_base, each.value, { append_slices = true, merge_slice_items = true }))
+    merged_values = deep_merge({ append_slices = true, merge_slice_items = true }, local.shell_base, each.value).values
+    merged_json   = jsonencode(deep_merge({ append_slices = true, merge_slice_items = true }, local.shell_base, each.value))
+  }
+}
+
+template "deep_merge" {
+  source      = format("%s/empty.yaml.j2", local.template_dir)
+  destination = format("%s-result.yaml", local.template_prefix)
+  values = {
+    result = yamlencode(
+      deep_merge(
+        { append_slices = true, merge_slice_items = true },
+        [for f in fileset("input/", "*.yaml") : yamldecode(file("input/${f}"))]...
+      )
+    )
   }
 }

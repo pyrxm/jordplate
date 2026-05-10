@@ -608,7 +608,7 @@ func TestDeepMergeFunc_AppendSlices(t *testing.T) {
 	opts := cty.ObjectVal(map[string]cty.Value{
 		"append_slices": cty.True,
 	})
-	got, err := deepMergeFunc.Call([]cty.Value{a, b, opts})
+	got, err := deepMergeFunc.Call([]cty.Value{opts, a, b})
 	if err != nil {
 		t.Fatalf("deep_merge: %v", err)
 	}
@@ -637,7 +637,7 @@ func TestDeepMergeFunc_MergeSliceItems(t *testing.T) {
 	opts := cty.ObjectVal(map[string]cty.Value{
 		"merge_slice_items": cty.True,
 	})
-	got, err := deepMergeFunc.Call([]cty.Value{a, b, opts})
+	got, err := deepMergeFunc.Call([]cty.Value{opts, a, b})
 	if err != nil {
 		t.Fatalf("deep_merge: %v", err)
 	}
@@ -652,14 +652,14 @@ func TestDeepMergeFunc_MergeSliceItems(t *testing.T) {
 }
 
 func TestDeepMergeFunc_OptsHeuristicDetection(t *testing.T) {
-	// An object whose keys aren't all option names must be merged, not
-	// interpreted as opts.
-	a := cty.ObjectVal(map[string]cty.Value{"a": cty.NumberIntVal(1)})
+	// A leading object whose keys aren't all option names must be merged,
+	// not interpreted as opts.
 	notOpts := cty.ObjectVal(map[string]cty.Value{
 		"append_slices": cty.True, // looks like an opt key...
 		"something":     cty.StringVal("extra"),
 	})
-	got, err := deepMergeFunc.Call([]cty.Value{a, notOpts})
+	b := cty.ObjectVal(map[string]cty.Value{"a": cty.NumberIntVal(1)})
+	got, err := deepMergeFunc.Call([]cty.Value{notOpts, b})
 	if err != nil {
 		t.Fatalf("deep_merge: %v", err)
 	}
@@ -674,7 +674,7 @@ func TestDeepMergeFunc_OptsHeuristicDetection(t *testing.T) {
 
 func TestDeepMergeFunc_EmptyOptsIsNoop(t *testing.T) {
 	a := cty.ObjectVal(map[string]cty.Value{"a": cty.NumberIntVal(1)})
-	got, err := deepMergeFunc.Call([]cty.Value{a, cty.EmptyObjectVal})
+	got, err := deepMergeFunc.Call([]cty.Value{cty.EmptyObjectVal, a})
 	if err != nil {
 		t.Fatalf("deep_merge: %v", err)
 	}
@@ -694,14 +694,49 @@ func TestDeepMergeFunc_NonMapArgumentFails(t *testing.T) {
 	}
 }
 
+func TestDeepMergeFunc_LeadingOptsWithExpansion(t *testing.T) {
+	// End-to-end: parse HCL using the real Load() and verify deep_merge
+	// works with leading opts followed by a tuple expanded via `...`.
+	dir := t.TempDir()
+	hcl := `
+locals {
+  parts = [
+    { items = ["a"] },
+    { items = ["b"] },
+    { items = ["c"] },
+  ]
+  merged = deep_merge({ append_slices = true }, local.parts...)
+}
+
+template "t" {
+  source      = "x.j2"
+  destination = "x.out"
+  values = {
+    out = local.merged
+  }
+}
+`
+	path := writeHCL(t, dir, hcl)
+	cfg, err := Load(path, Options{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	merged := ToGo(cfg.Locals["merged"]).(map[string]any)
+	items := merged["items"].([]any)
+	want := []any{"a", "b", "c"}
+	if !reflect.DeepEqual(items, want) {
+		t.Errorf("items = %v, want %v", items, want)
+	}
+}
+
 func TestDeepMergeFunc_NonBoolOptValueTreatedAsMap(t *testing.T) {
-	// An object that has only opt-named keys but non-bool values is NOT opts;
-	// it should be merged as data.
-	a := cty.ObjectVal(map[string]cty.Value{"x": cty.NumberIntVal(1)})
+	// A leading object that has only opt-named keys but non-bool values is
+	// NOT opts; it should be merged as data.
 	stringyOpt := cty.ObjectVal(map[string]cty.Value{
 		"append_slices": cty.StringVal("true"),
 	})
-	got, err := deepMergeFunc.Call([]cty.Value{a, stringyOpt})
+	b := cty.ObjectVal(map[string]cty.Value{"x": cty.NumberIntVal(1)})
+	got, err := deepMergeFunc.Call([]cty.Value{stringyOpt, b})
 	if err != nil {
 		t.Fatalf("deep_merge: %v", err)
 	}

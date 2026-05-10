@@ -107,9 +107,11 @@ var deepMergeOptKeys = map[string]bool{
 	"merge_slice_items": true,
 }
 
-// deep_merge(maps..., opts?) -> object. Deeply merges objects/maps; later
-// values win. An optional trailing object whose keys are all in
-// deepMergeOptKeys is interpreted as flags:
+// deep_merge(opts?, maps...) -> object. Deeply merges objects/maps; later
+// values win. The first argument is optionally an object whose keys are all
+// in deepMergeOptKeys — if so, it is interpreted as flags rather than as a
+// map to merge. Putting opts first lets callers expand a list of maps with
+// HCL's ... operator without conflicting with the opts argument.
 //
 //	append_slices     - concatenate slices instead of replacing.
 //	merge_slice_items - merge slice elements pairwise by index.
@@ -162,7 +164,7 @@ type deepMergeOpts struct {
 	mergeSliceItems bool
 }
 
-// splitDeepMergeArgs separates the trailing options object (if any) from the
+// splitDeepMergeArgs separates a leading options object (if any) from the
 // list of maps to merge. An argument is treated as options when it is a
 // non-null object/map whose keys are all in deepMergeOptKeys. Empty {} also
 // counts as an (empty) options object.
@@ -171,13 +173,12 @@ func splitDeepMergeArgs(args []cty.Value) ([]cty.Value, deepMergeOpts, error) {
 	if len(args) == 0 {
 		return nil, opts, nil
 	}
-	last := args[len(args)-1]
-	if isDeepMergeOpts(last) {
-		o, err := parseDeepMergeOpts(last)
+	if isDeepMergeOpts(args[0]) {
+		o, err := parseDeepMergeOpts(args[0])
 		if err != nil {
 			return nil, opts, err
 		}
-		return args[:len(args)-1], o, nil
+		return args[1:], o, nil
 	}
 	return args, opts, nil
 }

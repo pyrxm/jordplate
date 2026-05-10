@@ -1,0 +1,15 @@
+---
+name: "example-b"
+
+map:
+  test-a:
+    enabled: false
+  test-b:
+    enabled: true
+  hello:
+    there: true
+
+list:
+  - item-1b
+  - item-2b
+  - item-2c
