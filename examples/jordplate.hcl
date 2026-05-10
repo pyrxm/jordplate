@@ -1,7 +1,26 @@
+pre_hook "echo" {
+  command = ["echo", "hello world"]
+}
+
+post_hook "list_files" {
+  command = ["ls", "-l", "out/"]
+}
+
+post_hook "size_files" {
+  depends_on = ["list_files"]
+  command    = ["du", "-sh", "out/"]
+}
+
+post_hook "archive_files" {
+  depends_on = ["size_files"]
+  command    = ["tar", "cvzf", format("%s.tar.gz", local.archive_file), "out/"]
+}
+
 locals {
   config          = yamldecode(file("config.yaml"))
   template_dir    = "jordplate_templates.d/"
-  template_prefix = "_jp"
+  template_prefix = "out/_jp"
+  archive_file    = "_jp-rendered"
 
   kubernetes_fqdn = "kubernetes.mynetwork.com"
 

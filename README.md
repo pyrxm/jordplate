@@ -84,7 +84,7 @@ jordplate render [flags]
 
   -c, --config string   path to HCL configuration file (default "jordplate.hcl")
       --dry-run         print rendered output instead of writing files
-      --allow-exec      allow the exec() HCL function to run external commands
+      --allow-exec      allow exec() and pre_hook/post_hook blocks to run external commands
 ```
 
 Source/destination paths in the config are resolved relative to the directory
@@ -188,6 +188,43 @@ template "shard" {
   destination = "out/shard-${count.index}.yaml"
 }
 ```
+
+### `pre_hook` / `post_hook`
+
+External commands that run before (`pre_hook`) and after (`post_hook`) the
+template-rendering pass. Useful for fetching inputs, formatting outputs, or
+applying generated manifests.
+
+```hcl
+pre_hook "fetch_secrets" {
+  command = ["sh", "./scripts/fetch.sh"]
+}
+
+post_hook "format" {
+  command = ["terraform", "fmt", "-recursive", "out/"]
+}
+
+post_hook "apply" {
+  command    = ["kubectl", "apply", "-f", "out/"]
+  depends_on = ["format"]
+}
+```
+
+- `command` is a list of strings: `[program, arg1, arg2, ...]`. No shell is
+  involved unless you invoke one explicitly (`["sh", "-c", "..."]`).
+- `depends_on` lists other hooks of the **same kind** (a `pre_hook` cannot
+  depend on a `post_hook` and vice versa). Hooks run in dependency order;
+  cycles are rejected at load time.
+- Hooks see `local.*` and any other top-level evaluation context, so commands
+  can be parameterised: `command = ["echo", local.app_name]`.
+- Hook stdout/stderr are streamed live. The first hook that exits non-zero
+  aborts the run.
+- Working directory is the directory containing the HCL config file.
+
+**Execution gating**: hooks share the `--allow-exec` flag with the `exec()`
+function. Without `--allow-exec`, hooks are skipped with a notice on stderr —
+templates still render. With `--dry-run`, hooks are never executed; instead
+`would run <kind> '<name>': <cmd>` is printed for each.
 
 ## Functions
 

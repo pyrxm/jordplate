@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/pyrxm/jordplate/internal/config"
 	"github.com/pyrxm/jordplate/internal/render"
@@ -31,6 +34,11 @@ var renderCmd = &cobra.Command{
 		}
 
 		baseDir := filepath.Dir(absCfg)
+
+		if err := runHooks(cmd.OutOrStdout(), cmd.ErrOrStderr(), "pre_hook", cfg.PreHooks, baseDir, renderAllowExec, renderDryRun); err != nil {
+			return err
+		}
+
 		for _, tpl := range cfg.Templates {
 			if !tpl.Enabled {
 				fmt.Fprintf(cmd.OutOrStdout(), "skipped '%s' (disabled)\n", tpl.Name)
@@ -54,8 +62,42 @@ var renderCmd = &cobra.Command{
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "rendered '%s' -> %s\n", tpl.Name, dest)
 		}
+
+		if err := runHooks(cmd.OutOrStdout(), cmd.ErrOrStderr(), "post_hook", cfg.PostHooks, baseDir, renderAllowExec, renderDryRun); err != nil {
+			return err
+		}
 		return nil
 	},
+}
+
+// runHooks executes a list of hooks in the order returned by config.Load.
+// Output is streamed live to the caller's stdout/stderr. Hooks are skipped
+// (with a notice) when allowExec is false or dryRun is true.
+func runHooks(stdout, stderr io.Writer, kind string, hooks []config.Hook, baseDir string, allowExec, dryRun bool) error {
+	if len(hooks) == 0 {
+		return nil
+	}
+	if dryRun {
+		for _, h := range hooks {
+			fmt.Fprintf(stdout, "would run %s '%s': %s\n", kind, h.Name, strings.Join(h.Command, " "))
+		}
+		return nil
+	}
+	if !allowExec {
+		fmt.Fprintf(stderr, "skipping %d %s(s); pass --allow-exec to run them\n", len(hooks), kind)
+		return nil
+	}
+	for _, h := range hooks {
+		fmt.Fprintf(stdout, "running %s '%s': %s\n", kind, h.Name, strings.Join(h.Command, " "))
+		c := exec.Command(h.Command[0], h.Command[1:]...)
+		c.Dir = baseDir
+		c.Stdout = stdout
+		c.Stderr = stderr
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("%s '%s' failed: %w", kind, h.Name, err)
+		}
+	}
+	return nil
 }
 
 func resolvePath(baseDir, p string) string {
@@ -75,6 +117,6 @@ func writeFile(path, contents string) error {
 func init() {
 	renderCmd.Flags().StringVarP(&renderConfigPath, "config", "c", "jordplate.hcl", "path to HCL configuration file")
 	renderCmd.Flags().BoolVar(&renderDryRun, "dry-run", false, "print rendered output instead of writing files")
-	renderCmd.Flags().BoolVar(&renderAllowExec, "allow-exec", false, "allow the exec() HCL function to run external commands")
+	renderCmd.Flags().BoolVar(&renderAllowExec, "allow-exec", false, "allow exec() and pre_hook/post_hook blocks to run external commands")
 	rootCmd.AddCommand(renderCmd)
 }

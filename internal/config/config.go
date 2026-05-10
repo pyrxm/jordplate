@@ -21,6 +21,8 @@ type Options struct {
 type Config struct {
 	Locals    map[string]cty.Value
 	Templates []Template
+	PreHooks  []Hook
+	PostHooks []Hook
 }
 
 // Template describes one render target declared by a `template "name" {}` block.
@@ -32,10 +34,21 @@ type Template struct {
 	Enabled     bool
 }
 
+// Hook describes a pre_hook or post_hook block. Hooks are returned in
+// dependency-resolved order: any hook listed in DependsOn appears earlier in
+// the slice.
+type Hook struct {
+	Name      string
+	Command   []string
+	DependsOn []string
+}
+
 var fileSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{
 		{Type: "locals"},
 		{Type: "template", LabelNames: []string{"name"}},
+		{Type: "pre_hook", LabelNames: []string{"name"}},
+		{Type: "post_hook", LabelNames: []string{"name"}},
 	},
 }
 
@@ -47,6 +60,13 @@ var templateSchema = &hcl.BodySchema{
 		{Name: "count"},
 		{Name: "for_each"},
 		{Name: "enabled"},
+	},
+}
+
+var hookSchema = &hcl.BodySchema{
+	Attributes: []hcl.AttributeSchema{
+		{Name: "command", Required: true},
+		{Name: "depends_on"},
 	},
 }
 
@@ -82,7 +102,21 @@ func Load(path string, opts Options) (*Config, error) {
 		return nil, err
 	}
 
-	return &Config{Locals: locals, Templates: templates}, nil
+	preHooks, err := evaluateHooks("pre_hook", content.Blocks.OfType("pre_hook"), evalCtx)
+	if err != nil {
+		return nil, err
+	}
+	postHooks, err := evaluateHooks("post_hook", content.Blocks.OfType("post_hook"), evalCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Config{
+		Locals:    locals,
+		Templates: templates,
+		PreHooks:  preHooks,
+		PostHooks: postHooks,
+	}, nil
 }
 
 func evaluateLocals(blocks hcl.Blocks, funcs map[string]function.Function) (map[string]cty.Value, error) {
@@ -200,6 +234,124 @@ func evaluateTemplates(blocks hcl.Blocks, evalCtx *hcl.EvalContext) ([]Template,
 		}
 	}
 	return templates, nil
+}
+
+// evaluateHooks parses pre_hook / post_hook blocks and returns them ordered
+// such that every hook appears after the hooks it depends on. The kind argument
+// is "pre_hook" or "post_hook" and is only used to make error messages clearer.
+func evaluateHooks(kind string, blocks hcl.Blocks, evalCtx *hcl.EvalContext) ([]Hook, error) {
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+
+	hooks := make(map[string]Hook, len(blocks))
+	order := make([]string, 0, len(blocks))
+
+	for _, block := range blocks {
+		name := block.Labels[0]
+		if _, exists := hooks[name]; exists {
+			return nil, fmt.Errorf("%s %q declared more than once", kind, name)
+		}
+
+		content, diags := block.Body.Content(hookSchema)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		cmdAttr := content.Attributes["command"]
+		cmdVal, diags := cmdAttr.Expr.Value(evalCtx)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+		cmd, err := stringList(cmdVal)
+		if err != nil {
+			return nil, fmt.Errorf("%s %q: command %w", kind, name, err)
+		}
+		if len(cmd) == 0 {
+			return nil, fmt.Errorf("%s %q: command must contain at least one element", kind, name)
+		}
+
+		var deps []string
+		if attr, ok := content.Attributes["depends_on"]; ok {
+			depVal, diags := attr.Expr.Value(evalCtx)
+			if diags.HasErrors() {
+				return nil, diags
+			}
+			deps, err = stringList(depVal)
+			if err != nil {
+				return nil, fmt.Errorf("%s %q: depends_on %w", kind, name, err)
+			}
+			for _, d := range deps {
+				if d == name {
+					return nil, fmt.Errorf("%s %q depends on itself", kind, name)
+				}
+			}
+		}
+
+		hooks[name] = Hook{Name: name, Command: cmd, DependsOn: deps}
+		order = append(order, name)
+	}
+
+	for _, h := range hooks {
+		for _, d := range h.DependsOn {
+			if _, ok := hooks[d]; !ok {
+				return nil, fmt.Errorf("%s %q depends on unknown %s %q", kind, h.Name, kind, d)
+			}
+		}
+	}
+
+	resolved := map[string]bool{}
+	out := make([]Hook, 0, len(hooks))
+	remaining := append([]string(nil), order...)
+	for len(remaining) > 0 {
+		progress := false
+		next := remaining[:0]
+		for _, name := range remaining {
+			h := hooks[name]
+			ready := true
+			for _, d := range h.DependsOn {
+				if !resolved[d] {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				next = append(next, name)
+				continue
+			}
+			out = append(out, h)
+			resolved[name] = true
+			progress = true
+		}
+		remaining = next
+		if !progress {
+			sort.Strings(remaining)
+			return nil, fmt.Errorf("%ss form a dependency cycle: %v", kind, remaining)
+		}
+	}
+	return out, nil
+}
+
+// stringList converts a cty list/tuple/set of strings into a Go slice. It
+// returns a verb-friendly error message that callers prefix with the attribute
+// name, e.g. "command must be a list of strings".
+func stringList(v cty.Value) ([]string, error) {
+	if v.IsNull() {
+		return nil, fmt.Errorf("must not be null")
+	}
+	ty := v.Type()
+	if !(ty.IsListType() || ty.IsTupleType() || ty.IsSetType()) {
+		return nil, fmt.Errorf("must be a list of strings, got %s", ty.FriendlyName())
+	}
+	out := make([]string, 0, v.LengthInt())
+	for it := v.ElementIterator(); it.Next(); {
+		_, e := it.Element()
+		if e.IsNull() || e.Type() != cty.String {
+			return nil, fmt.Errorf("must be a list of strings")
+		}
+		out = append(out, e.AsString())
+	}
+	return out, nil
 }
 
 type iteration struct {
